@@ -1,0 +1,11 @@
+# Python virtual env
+.venv/
+
+# macOS system files
+.DS_Store
+
+# Other common ignores (optional but good)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
