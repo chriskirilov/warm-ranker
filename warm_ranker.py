@@ -15,7 +15,7 @@ weave.init("warm_ranker_project")
 # Setups (keys from sponsors/on-site)
 redis_client = Redis.from_url(
     "redis://default:e7CZNwiVmLYJeAnKXAbydu49gHum2iq4@redis-15060.c60.us-west-1-2.ec2.cloud.redislabs.com:15060",
-    decode_responses=True  # Important for string responses
+    decode_responses=True
 )
 embedder = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 llm = OpenAI(temperature=0.5)  # Swap to Cursor-advanced model for better accuracy
@@ -89,6 +89,12 @@ def main(idea, csv_path):
     df_ranked = pd.DataFrame([{**c['data'], 'score': c['score'], 'reason': c['reason']} for c in ranked])
     print(df_ranked.to_markdown())  # For console; export to UI later
     weave.log({"final_ranked": df_ranked.to_dict()})  # Viz in Weave dashboard
+
+# Redis test
+try:
+    print("Redis connected:", redis_client.ping())
+except Exception as e:
+    print("Redis error:", str(e))
 
 # Quick test (create mock CSV)
 if __name__ == "__main__":
