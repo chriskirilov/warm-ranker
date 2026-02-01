@@ -43,20 +43,47 @@ class handler(BaseHTTPRequestHandler):
         csv_path = None
         try:
             MAX_CONTENT_LENGTH = 10 * 1024 * 1024  # 10MB limit
+            MAX_BUFFER_SIZE = 4294967296  # Node.js buffer max size (4GB)
 
-            # Handle Content-Length
-            if 'Content-Length' not in self.headers:
+            # Validate Content-Length BEFORE reading to prevent buffer overflow
+            if 'Content-Length' in self.headers:
+                try:
+                    content_length = int(self.headers['Content-Length'])
+                except (ValueError, TypeError):
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(b'{"error": "Invalid Content-Length header"}')
+                    return
+                
+                # Critical: Reject values that would cause Node.js buffer overflow
+                if content_length < 0:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(b'{"error": "Content-Length must be non-negative"}')
+                    return
+                
+                if content_length > MAX_BUFFER_SIZE:
+                    self.send_response(413)
+                    self.end_headers()
+                    self.wfile.write(json.dumps({'error': f'Content-Length exceeds maximum buffer size ({MAX_BUFFER_SIZE} bytes)'}).encode())
+                    return
+                
+                if content_length > MAX_CONTENT_LENGTH:
+                    self.send_response(413)
+                    self.end_headers()
+                    self.wfile.write(json.dumps({'error': f'File too large (max {MAX_CONTENT_LENGTH} bytes)'}).encode())
+                    return
+            else:
+                # No Content-Length header - read limited amount
                 post_data = self.rfile.read(MAX_CONTENT_LENGTH)
                 content_length = len(post_data)
-            else:
-                content_length = int(self.headers['Content-Length'])
+                if content_length == 0:
+                    self.send_response(411)
+                    self.end_headers()
+                    self.wfile.write(b'{"error": "Content-Length header required"}')
+                    return
 
-            if content_length > MAX_CONTENT_LENGTH:
-                self.send_response(413)
-                self.end_headers()
-                self.wfile.write(json.dumps({'error': f'File too large (max {MAX_CONTENT_LENGTH} bytes)'}).encode())
-                return
-
+            # Now safe to read
             post_data = self.rfile.read(content_length)
 
             if len(post_data) == 0:
