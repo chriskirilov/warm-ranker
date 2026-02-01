@@ -148,9 +148,9 @@ def main(idea, csv_path):
     process_contacts(csv_path, idea)
     ranked = warm_ranker(idea)
     df_ranked = pd.DataFrame([{**c['data'], 'score': c['score'], 'reason': c['reason']} for c in ranked])
-    print(df_ranked.to_markdown())  # For console; export to UI later
     # Logging handled automatically by @weave.op() decorator
     # weave.log_call("final_ranked", {"data": df_ranked.to_dict()}, df_ranked.to_dict())
+    return df_ranked.to_dict('records')  # Return for JSON response
 
 # Redis test
 try:
@@ -165,4 +165,5 @@ if __name__ == "__main__":
         {'First Name': 'Jane', 'Last Name': 'Smith', 'Company': 'Tech Startup', 'Position': 'Marketer', 'URL': 'https://linkedin.com/in/janesmith'}
     ]
     pd.DataFrame(mock_data).to_csv('mock_contacts.csv', index=False)
-    main("AI tools for marketing automation", "mock_contacts.csv")
+    result = main("AI tools for marketing automation", "mock_contacts.csv")
+    print(f"Ranked {len(result)} contacts")
