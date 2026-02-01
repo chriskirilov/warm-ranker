@@ -5,6 +5,8 @@ from langchain.llms import OpenAI
 from langchain.embeddings import HuggingFaceEmbeddings
 from redis import Redis
 from redis.commands.search.query import Query
+from redis.commands.search.field import VectorField
+from redis.commands.search.index_definition import IndexDefinition, IndexType
 from browserbase import Browserbase
 from concurrent.futures import ThreadPoolExecutor
 import json
@@ -22,6 +24,19 @@ redis_client = Redis.from_url(
     "redis://default:e7CZNwiVmLYJeAnKXAbydu49gHum2iq4@redis-15060.c60.us-west-1-2.ec2.cloud.redislabs.com:15060",
     decode_responses=True
 )
+
+# Create index if not exists (JSON type, with vector at root $.vector)
+try:
+    redis_client.ft("contact_idx").info()  # Check if exists
+except:
+    vector_field = VectorField("$.vector", "FLAT", {
+        "TYPE": "FLOAT32", 
+        "DIM": 384,  # From all-MiniLM-L6-v2 model
+        "DISTANCE_METRIC": "COSINE"
+    }, as_name="vector")  # Alias for query
+    definition = IndexDefinition(prefix=["contact:"], index_type=IndexType.JSON)
+    redis_client.ft("contact_idx").create_index(fields=[vector_field], definition=definition)
+
 embedder = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 try:
     # Switch to W&B proxy
@@ -55,42 +70,9 @@ if llm:
 else:
     agent = None
 
-def setup_redis_index(dimension=384, index_name="contact_idx"):  # all-MiniLM-L6-v2 has 384 dimensions
-    """Create Redis search index for vector similarity search"""
-    from redis.commands.search.field import VectorField, TextField
-    from redis.commands.search.index_definition import IndexDefinition, IndexType
-    from redis.exceptions import ResponseError
-    
-    try:
-        # Check if index exists
-        redis_client.ft(index_name).info()
-        print(f"Redis index '{index_name}' already exists")
-    except ResponseError as e:
-        if "no such index" in str(e).lower() or "unknown index" in str(e).lower():
-            # Create index if it doesn't exist
-            schema = (
-                VectorField("$.vector", "FLAT", {  # JSON path for vector field
-                    "TYPE": "FLOAT32",
-                    "DIM": dimension,
-                    "DISTANCE_METRIC": "COSINE"
-                }),
-                TextField("$.profile_text"),  # JSON path for text field
-            )
-            
-            redis_client.ft(index_name).create_index(
-                schema,
-                definition=IndexDefinition(prefix=["contact:"], index_type=IndexType.JSON)
-            )
-            print(f"Redis index '{index_name}' created successfully")
-        else:
-            raise
-
 def process_contacts(csv_path, idea, max_workers=5):
     df = pd.read_csv(csv_path)  # Assumes LinkedIn export columns: First Name, Last Name, Company, Position, URL
     contacts = df.to_dict('records')
-    
-    # Setup Redis index for vector search
-    setup_redis_index()
     
     # Parallel enrichment
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -102,10 +84,8 @@ def process_contacts(csv_path, idea, max_workers=5):
     for i, contact in enumerate(contacts):
         profile_text = f"{contact.get('Position', '')} at {contact.get('Company', '')} - Bio: {contacts[i]['enriched_bio']}"
         embed = embedder.embed_query(profile_text)
-        # Convert embed to numpy array for storage (Redis JSON stores as list)
-        embed_array = np.array(embed, dtype=np.float32)
-        # Store vector as list in JSON (Redis handles conversion for vector search)
-        redis_client.json().set(f"contact:{i}", '.', {"data": contact, "vector": embed_array.tolist(), "profile_text": profile_text})
+        embed_bytes = np.array(embed, dtype=np.float32).tobytes()  # Fix to float32 bytes
+        redis_client.json().set(f"contact:{i}", '.', {"data": contact, "vector": embed_bytes, "profile_text": profile_text})
     
     return contacts
 
@@ -113,17 +93,21 @@ def process_contacts(csv_path, idea, max_workers=5):
 def warm_ranker(idea, iterations=2, index_name="contact_idx"):
     # Semantic pre-filter top candidates
     idea_embed = embedder.embed_query(idea)
-    idea_embed_bytes = np.array(idea_embed, dtype=np.float32).tobytes()  # Ensure float32 for Redis
-    total = redis_client.dbsize()
-    k = min(50, total)  # Adjust based on contacts
-    # Updated syntax for binary vector with dialect 2
-    query = (Query("*=>[KNN $K @vector $VEC PARAMS 0]")  # Updated syntax for binary vector
+    idea_embed_bytes = np.array(idea_embed, dtype=np.float32).tobytes()
+    k = min(50, redis_client.dbsize())  # Adjust K dynamically
+    query = (Query("*=>[KNN $K @vector $VEC AS dist]")
              .return_fields("data", "profile_text")
-             .paging(0, k)  # Paginate if needed
+             .sort_by("dist", asc=True)  # Optional: sort by distance
              .dialect(2))
-    results = redis_client.ft(index_name).search(query, query_params={"K": k, "VEC": idea_embed_bytes})  # Use index name
+    results = redis_client.ft("contact_idx").search(query, query_params={"K": str(k), "VEC": idea_embed_bytes})
     
-    candidates = [json.loads(res['data']) for res in results.docs if 'data' in res]
+    candidates = []
+    for doc in results.docs:
+        candidate = {
+            'data': json.loads(doc.data) if doc.data else {},  # Parse if str
+            'profile_text': doc.profile_text
+        }
+        candidates.append(candidate)
     
     prompt = f"Score lead relevance to idea '{idea}' on 1-10 based on title, company, bio. Provide score and brief reason."
     
