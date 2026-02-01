@@ -1,11 +1,14 @@
 {
-  "builds": [
-    {
-      "src": "package.json",
-      "use": "@vercel/next"
+  "functions": {
+    "api/rank.py": {
+      "runtime": "python3.9@5.0.0"
     }
-  ],
+  },
   "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/$1"
+    },
     {
       "source": "/(.*)",
       "destination": "/"
