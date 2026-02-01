@@ -1,7 +1,7 @@
 {
   "buildCommand": "npm run build",
   "framework": "nextjs",
-  "installCommand": "npm install && pip install -r requirements.txt",
+  "installCommand": "npm install",
   "functions": {
     "api/rank.py": {
       "runtime": "python@5.0.0"
