@@ -166,4 +166,4 @@ if __name__ == "__main__":
     ]
     pd.DataFrame(mock_data).to_csv('mock_contacts.csv', index=False)
     result = main("AI tools for marketing automation", "mock_contacts.csv")
-    print(f"Ranked {len(result)} contacts")
+    print(json.dumps(result))  # Output JSON for API
