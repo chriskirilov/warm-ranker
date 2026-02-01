@@ -10,6 +10,7 @@ export default function Home() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
+    setResults(null);  // Clear old results on new submit
     const formData = new FormData();
     formData.append('idea', idea);
     formData.append('csv', csvFile);
@@ -19,7 +20,7 @@ export default function Home() {
         setResults(await res.json());
       } else {
         const errorData = await res.json();
-        alert('Error: ' + errorData.error);  // Show error to user
+        alert('Error: ' + errorData.error);
       }
     } catch (error) {
       alert('Network error: ' + error.message);
@@ -31,30 +32,48 @@ export default function Home() {
     <div style={{ padding: '20px' }}>
       <h1>Warm Ranker: Self-Improving Lead Analyzer</h1>
       <form onSubmit={handleSubmit}>
-        <input type="text" value={idea} onChange={(e) => setIdea(e.target.value)} placeholder="Idea (e.g., AI tools for marketing)" required />
-        <input type="file" accept=".csv" onChange={(e) => setCsvFile(e.target.files[0])} required />
-        <button type="submit" disabled={loading}>{loading ? 'Ranking...' : 'Rank Leads'}</button>
+        <input
+          type="text"
+          value={idea}
+          onChange={(e) => setIdea(e.target.value)}
+          placeholder="Idea (e.g., AI tools for marketing)"
+          required
+        />
+        <input
+          type="file"
+          accept=".csv"
+          onChange={(e) => setCsvFile(e.target.files[0])}
+          required
+        />
+        <button type="submit" disabled={loading || !csvFile}>{loading ? 'Ranking...' : 'Rank Leads'}</button>
       </form>
+      {loading && <p>Processing - this may take a moment...</p>}
       {results && (
         <div>
           <h2>Ranked Leads</h2>
-          <table border="1">
+          <table style={{ borderCollapse: 'collapse', width: '100%' }}>
             <thead>
-              <tr><th>Name</th><th>Company</th><th>Position</th><th>Score</th><th>Reason</th></tr>
+              <tr style={{ background: '#f0f0f0' }}>
+                <th style={{ padding: '8px', textAlign: 'left' }}>Name</th>
+                <th style={{ padding: '8px', textAlign: 'left' }}>Company</th>
+                <th style={{ padding: '8px', textAlign: 'left' }}>Position</th>
+                <th style={{ padding: '8px', textAlign: 'left' }}>Score</th>
+                <th style={{ padding: '8px', textAlign: 'left' }}>Reason</th>
+              </tr>
             </thead>
             <tbody>
               {results.map((lead, i) => (
-                <tr key={i}>
-                  <td>{lead['First Name']} {lead['Last Name']}</td>
-                  <td>{lead.Company}</td>
-                  <td>{lead.Position}</td>
-                  <td>{lead.score}</td>
-                  <td>{lead.reason}</td>
+                <tr key={i} style={{ borderBottom: '1px solid #ddd' }}>
+                  <td style={{ padding: '8px' }}>{lead['First Name']} {lead['Last Name']}</td>
+                  <td style={{ padding: '8px' }}>{lead.Company}</td>
+                  <td style={{ padding: '8px' }}>{lead.Position}</td>
+                  <td style={{ padding: '8px' }}>{lead.score}</td>
+                  <td style={{ padding: '8px' }}>{lead.reason}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <iframe src="https://wandb.ai/pipelineom/warm_ranker" width="800" height="600" title="Weave Traces" />
+          <iframe style={{ width: '100%', height: '600px' }} src="https://wandb.ai/pipelineom/warm_ranker" title="Weave Traces" />
         </div>
       )}
     </div>
