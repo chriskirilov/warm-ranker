@@ -15,9 +15,14 @@ export default function Home() {
     formData.append('csv', csvFile);
     try {
       const res = await fetch('/api/rank', { method: 'POST', body: formData });
-      if (res.ok) setResults(await res.json());
+      if (res.ok) {
+        setResults(await res.json());
+      } else {
+        const errorData = await res.json();
+        alert('Error: ' + errorData.error);  // Show error to user
+      }
     } catch (error) {
-      console.error(error);
+      alert('Network error: ' + error.message);
     }
     setLoading(false);
   };
