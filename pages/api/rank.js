@@ -55,12 +55,44 @@ export default async function handler(req, res) {
     const csvPath = csvFile.filepath;
     
     try {
-      // Call Python script
-      const pythonCmd = process.env.PYTHON_PATH || 'python3';
-      const { stdout, stderr } = await execPromise(
-        `${pythonCmd} warm_ranker.py "${idea}" "${csvPath}"`,
-        { maxBuffer: 10 * 1024 * 1024 } // 10MB output limit
-      );
+      // Call Python script - try multiple Python paths for Vercel compatibility
+      const pythonPaths = [
+        '/usr/local/bin/python3',
+        '/usr/bin/python3',
+        'python3',
+        'python',
+        process.env.PYTHON_PATH
+      ].filter(Boolean);
+      
+      let stdout, stderr;
+      let lastError;
+      
+      for (const pythonCmd of pythonPaths) {
+        try {
+          const result = await execPromise(
+            `${pythonCmd} warm_ranker.py "${idea}" "${csvPath}"`,
+            { 
+              maxBuffer: 10 * 1024 * 1024, // 10MB output limit
+              env: { ...process.env, PYTHONUNBUFFERED: '1' }
+            }
+          );
+          stdout = result.stdout;
+          stderr = result.stderr;
+          break;
+        } catch (error) {
+          lastError = error;
+          // If it's a "command not found" error, try next path
+          if (error.message.includes('command not found') || error.message.includes('ENOENT')) {
+            continue;
+          }
+          // Otherwise, rethrow
+          throw error;
+        }
+      }
+      
+      if (!stdout && lastError) {
+        throw new Error(`Python not found. Tried: ${pythonPaths.join(', ')}. Error: ${lastError.message}`);
+      }
       
       if (stderr && !stdout) {
         console.error('Python stderr:', stderr);
