@@ -1,6 +1,9 @@
 import weave
 import pandas as pd
 import os
+import sys
+import json
+import numpy as np
 from langchain.agents import initialize_agent, Tool
 from langchain_openai import ChatOpenAI  # Or OpenAI if not chat
 from langchain_core.messages import HumanMessage
@@ -11,8 +14,6 @@ from redis.commands.search.field import VectorField
 from redis.commands.search.index_definition import IndexDefinition, IndexType
 from browserbase import Browserbase
 from concurrent.futures import ThreadPoolExecutor
-import json
-import numpy as np
 
 # Init Weave (leverage MCP in Cursor for auto-tracing queries like "Top runs by score")
 try:
@@ -152,18 +153,27 @@ def main(idea, csv_path):
     # weave.log_call("final_ranked", {"data": df_ranked.to_dict()}, df_ranked.to_dict())
     return df_ranked.to_dict('records')  # Return for JSON response
 
-# Redis test
-try:
-    print("Redis connected:", redis_client.ping())
-except Exception as e:
-    print("Redis error:", str(e))
+# Redis test (only in test mode, not when called from API)
+if __name__ == "__main__" and len(sys.argv) < 3:
+    try:
+        print("Redis connected:", redis_client.ping(), file=sys.stderr)
+    except Exception as e:
+        print("Redis error:", str(e), file=sys.stderr)
 
 # Quick test (create mock CSV)
 if __name__ == "__main__":
-    mock_data = [
-        {'First Name': 'John', 'Last Name': 'Doe', 'Company': 'AI Marketing Inc', 'Position': 'CTO', 'URL': 'https://linkedin.com/in/johndoe'},
-        {'First Name': 'Jane', 'Last Name': 'Smith', 'Company': 'Tech Startup', 'Position': 'Marketer', 'URL': 'https://linkedin.com/in/janesmith'}
-    ]
-    pd.DataFrame(mock_data).to_csv('mock_contacts.csv', index=False)
-    result = main("AI tools for marketing automation", "mock_contacts.csv")
-    print(json.dumps(result))  # Output JSON for API
+    if len(sys.argv) >= 3:
+        # Called from API with command line arguments
+        idea = sys.argv[1]
+        csv_path = sys.argv[2]
+        result = main(idea, csv_path)
+        print(json.dumps(result))  # Output JSON for API
+    else:
+        # Test mode with mock data
+        mock_data = [
+            {'First Name': 'John', 'Last Name': 'Doe', 'Company': 'AI Marketing Inc', 'Position': 'CTO', 'URL': 'https://linkedin.com/in/johndoe'},
+            {'First Name': 'Jane', 'Last Name': 'Smith', 'Company': 'Tech Startup', 'Position': 'Marketer', 'URL': 'https://linkedin.com/in/janesmith'}
+        ]
+        pd.DataFrame(mock_data).to_csv('mock_contacts.csv', index=False)
+        result = main("AI tools for marketing automation", "mock_contacts.csv")
+        print(json.dumps(result))  # Output JSON for API
