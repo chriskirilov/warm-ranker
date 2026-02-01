@@ -1,16 +1,21 @@
 import weave
 import pandas as pd
 from langchain.agents import initialize_agent, Tool
-from langchain.llms import OpenAI  # Integrate Cursor's top models here for $50 credits
+from langchain.llms import OpenAI
 from langchain.embeddings import HuggingFaceEmbeddings
 from redis import Redis
 from redis.commands.search.query import Query
 from browserbase import Browserbase
 from concurrent.futures import ThreadPoolExecutor
 import json
+import numpy as np
 
 # Init Weave (leverage MCP in Cursor for auto-tracing queries like "Top runs by score")
-weave.init("warm_ranker_project")
+try:
+    weave.init("warm_ranker_project")
+    # LangChain auto-tracing is enabled automatically with weave.init
+except Exception as e:
+    print(f"Weave initialization skipped: {e}")
 
 # Setups (keys from sponsors/on-site)
 redis_client = Redis.from_url(
@@ -18,7 +23,21 @@ redis_client = Redis.from_url(
     decode_responses=True
 )
 embedder = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-llm = OpenAI(temperature=0.5)  # Swap to Cursor-advanced model for better accuracy
+try:
+    # Switch to W&B proxy
+    llm = OpenAI(
+        openai_api_key="wandb_inference_proxy",  # Magic key for proxy
+        base_url="https://api.wandb.ai/inference/v1",  # W&B endpoint
+        temperature=0.5
+    )
+except Exception as e:
+    print(f"W&B OpenAI proxy initialization skipped: {e}")
+    try:
+        # Fallback to regular OpenAI
+        llm = OpenAI(temperature=0.5)
+    except Exception as e2:
+        print(f"OpenAI initialization skipped: {e2}")
+        llm = None
 bb = Browserbase(api_key='bb_live_4S84BLlgfSsxbWNkXCHA9dnLkK0')
 
 def enrich_profile(url):
@@ -31,11 +50,47 @@ def enrich_profile(url):
 
 tools = [Tool(name="EnrichProfile", func=enrich_profile, description="Summarize public LinkedIn profile bio/skills")]
 
-agent = initialize_agent(tools, llm, agent_type="zero-shot-react-description")
+if llm:
+    agent = initialize_agent(tools, llm, agent_type="zero-shot-react-description")
+else:
+    agent = None
+
+def setup_redis_index(dimension=384, index_name="contact_idx"):  # all-MiniLM-L6-v2 has 384 dimensions
+    """Create Redis search index for vector similarity search"""
+    from redis.commands.search.field import VectorField, TextField
+    from redis.commands.search.index_definition import IndexDefinition, IndexType
+    from redis.exceptions import ResponseError
+    
+    try:
+        # Check if index exists
+        redis_client.ft(index_name).info()
+        print(f"Redis index '{index_name}' already exists")
+    except ResponseError as e:
+        if "no such index" in str(e).lower() or "unknown index" in str(e).lower():
+            # Create index if it doesn't exist
+            schema = (
+                VectorField("$.vector", "FLAT", {  # JSON path for vector field
+                    "TYPE": "FLOAT32",
+                    "DIM": dimension,
+                    "DISTANCE_METRIC": "COSINE"
+                }),
+                TextField("$.profile_text"),  # JSON path for text field
+            )
+            
+            redis_client.ft(index_name).create_index(
+                schema,
+                definition=IndexDefinition(prefix=["contact:"], index_type=IndexType.JSON)
+            )
+            print(f"Redis index '{index_name}' created successfully")
+        else:
+            raise
 
 def process_contacts(csv_path, idea, max_workers=5):
     df = pd.read_csv(csv_path)  # Assumes LinkedIn export columns: First Name, Last Name, Company, Position, URL
     contacts = df.to_dict('records')
+    
+    # Setup Redis index for vector search
+    setup_redis_index()
     
     # Parallel enrichment
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -47,18 +102,26 @@ def process_contacts(csv_path, idea, max_workers=5):
     for i, contact in enumerate(contacts):
         profile_text = f"{contact.get('Position', '')} at {contact.get('Company', '')} - Bio: {contacts[i]['enriched_bio']}"
         embed = embedder.embed_query(profile_text)
-        redis_client.json().set(f"contact:{i}", '.', {"data": contact, "vector": embed, "profile_text": profile_text})
+        # Convert embed to numpy array for storage (Redis JSON stores as list)
+        embed_array = np.array(embed, dtype=np.float32)
+        # Store vector as list in JSON (Redis handles conversion for vector search)
+        redis_client.json().set(f"contact:{i}", '.', {"data": contact, "vector": embed_array.tolist(), "profile_text": profile_text})
     
     return contacts
 
 @weave.op()
-def warm_ranker(idea, iterations=2):
+def warm_ranker(idea, iterations=2, index_name="contact_idx"):
     # Semantic pre-filter top candidates
     idea_embed = embedder.embed_query(idea)
+    idea_embed_bytes = np.array(idea_embed, dtype=np.float32).tobytes()  # Ensure float32 for Redis
     total = redis_client.dbsize()
     k = min(50, total)  # Adjust based on contacts
-    query = Query(f"*=>[KNN {k} @vector $vec]").return_fields("data", "profile_text").dialect(2)
-    results = redis_client.ft().search(query, query_params={"vec": idea_embed.tobytes()})
+    # Updated syntax for binary vector with dialect 2
+    query = (Query("*=>[KNN $K @vector $VEC PARAMS 0]")  # Updated syntax for binary vector
+             .return_fields("data", "profile_text")
+             .paging(0, k)  # Paginate if needed
+             .dialect(2))
+    results = redis_client.ft(index_name).search(query, query_params={"K": k, "VEC": idea_embed_bytes})  # Use index name
     
     candidates = [json.loads(res['data']) for res in results.docs if 'data' in res]
     
