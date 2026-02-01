@@ -1,7 +1,9 @@
 import weave
 import pandas as pd
+import os
 from langchain.agents import initialize_agent, Tool
-from langchain.llms import OpenAI
+from langchain_openai import ChatOpenAI  # Or OpenAI if not chat
+from langchain_core.messages import HumanMessage
 from langchain.embeddings import HuggingFaceEmbeddings
 from redis import Redis
 from redis.commands.search.query import Query
@@ -39,16 +41,18 @@ except:
 
 embedder = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 try:
-    # Switch to W&B proxy
-    llm = OpenAI(
-        openai_api_key="wandb_inference_proxy",  # Magic key for proxy
-        base_url="https://api.wandb.ai/inference/v1",  # W&B endpoint
-        temperature=0.5
+    llm = ChatOpenAI(
+        model="meta-llama/Llama-3.1-8B-Instruct",  # Choose from supported: e.g., Llama-3.1-8B-Instruct (fast/cheap for hackathon)
+        temperature=0.5,
+        api_key=os.environ.get("WANDB_API_KEY", "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"),  # Your key from earlier
+        base_url="https://api.inference.wandb.ai/v1",
+        extra_headers={"OpenAI-Project": "pipelineom/warm_ranker"}  # Your entity/project for tracking/credits
     )
 except Exception as e:
-    print(f"W&B OpenAI proxy initialization skipped: {e}")
+    print(f"ChatOpenAI initialization skipped: {e}")
     try:
         # Fallback to regular OpenAI
+        from langchain_openai import OpenAI
         llm = OpenAI(temperature=0.5)
     except Exception as e2:
         print(f"OpenAI initialization skipped: {e2}")
@@ -58,7 +62,9 @@ bb = Browserbase(api_key='bb_live_4S84BLlgfSsxbWNkXCHA9dnLkK0')
 def enrich_profile(url):
     try:
         content = bb.scrape(url)
-        bio = llm(f"Extract concise bio and skills summary from: {content[:2000]}")
+        # ChatOpenAI uses invoke with messages
+        response = llm.invoke([HumanMessage(content=f"Extract concise bio and skills summary from: {content[:2000]}")])
+        bio = response.content if hasattr(response, 'content') else str(response)
         return bio
     except:
         return "Enrichment failed"
@@ -84,8 +90,9 @@ def process_contacts(csv_path, idea, max_workers=5):
     for i, contact in enumerate(contacts):
         profile_text = f"{contact.get('Position', '')} at {contact.get('Company', '')} - Bio: {contacts[i]['enriched_bio']}"
         embed = embedder.embed_query(profile_text)
-        embed_bytes = np.array(embed, dtype=np.float32).tobytes()  # Fix to float32 bytes
-        redis_client.json().set(f"contact:{i}", '.', {"data": contact, "vector": embed_bytes, "profile_text": profile_text})
+        # Store as list in JSON (Redis converts to bytes internally for vector search)
+        embed_array = np.array(embed, dtype=np.float32)
+        redis_client.json().set(f"contact:{i}", '.', {"data": contact, "vector": embed_array.tolist(), "profile_text": profile_text})
     
     return contacts
 
@@ -103,9 +110,13 @@ def warm_ranker(idea, iterations=2, index_name="contact_idx"):
     
     candidates = []
     for doc in results.docs:
+        # Access fields from document - Redis returns fields as dict-like or attributes
+        data_str = doc.get('data') if hasattr(doc, 'get') else getattr(doc, 'data', None)
+        profile_text = doc.get('profile_text') if hasattr(doc, 'get') else getattr(doc, 'profile_text', '')
+        
         candidate = {
-            'data': json.loads(doc.data) if doc.data else {},  # Parse if str
-            'profile_text': doc.profile_text
+            'data': json.loads(data_str) if data_str and isinstance(data_str, str) else (data_str if data_str else {}),
+            'profile_text': profile_text
         }
         candidates.append(candidate)
     
@@ -121,10 +132,13 @@ def warm_ranker(idea, iterations=2, index_name="contact_idx"):
         
         avg_score = sum(c['score'] for c in candidates) / len(candidates) if candidates else 0
         if avg_score < 7 or i < iterations - 1:
-            reflection = llm(f"Review scores: {str([c['score'] for c in candidates])}. Suggest prompt improvements for '{idea}'.")
-            prompt = llm(f"Refine this prompt: {prompt} based on {reflection}")
+            reflection_response = llm.invoke([HumanMessage(content=f"Review scores: {str([c['score'] for c in candidates])}. Suggest prompt improvements for '{idea}'.")])
+            reflection = reflection_response.content if hasattr(reflection_response, 'content') else str(reflection_response)
+            prompt_response = llm.invoke([HumanMessage(content=f"Refine this prompt: {prompt} based on {reflection}")])
+            prompt = prompt_response.content if hasattr(prompt_response, 'content') else str(prompt_response)
         
-        weave.log({"iteration": i, "avg_score": avg_score, "prompt": prompt, "sample_scores": [c['score'] for c in candidates[:5]]})
+        # Logging handled automatically by @weave.op() decorator
+        # weave.log_call({"iteration": i, "avg_score": avg_score, "prompt": prompt, "sample_scores": [c['score'] for c in candidates[:5]]})
     
     # Final sort
     candidates.sort(key=lambda x: x['score'], reverse=True)
@@ -135,7 +149,8 @@ def main(idea, csv_path):
     ranked = warm_ranker(idea)
     df_ranked = pd.DataFrame([{**c['data'], 'score': c['score'], 'reason': c['reason']} for c in ranked])
     print(df_ranked.to_markdown())  # For console; export to UI later
-    weave.log({"final_ranked": df_ranked.to_dict()})  # Viz in Weave dashboard
+    # Logging handled automatically by @weave.op() decorator
+    # weave.log_call("final_ranked", {"data": df_ranked.to_dict()}, df_ranked.to_dict())
 
 # Redis test
 try:
