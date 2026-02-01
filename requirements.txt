@@ -1,9 +1,9 @@
 weave
 pandas
 numpy
-langchain
-langchain-openai
-langchain-community
+langchain==0.1.20
+langchain-openai==0.1.20
+langchain-community==0.0.38
 sentence-transformers
 redis
 browserbase
