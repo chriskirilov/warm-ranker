@@ -41,25 +41,39 @@ class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         csv_path = None
         try:
-            # Read request body in chunks to avoid buffer overflow
-            MAX_CHUNK_SIZE = 1024 * 1024  # 1MB chunks
             MAX_TOTAL_SIZE = 10 * 1024 * 1024  # 10MB total limit
+            MAX_BUFFER_SIZE = 4294967296  # Node.js max (4GB)
             
-            # Read Content-Length but validate it first
-            content_length = 0
+            # CRITICAL: Validate Content-Length immediately to prevent Vercel wrapper buffer overflow
+            # This must happen before reading any data
             if 'Content-Length' in self.headers:
                 try:
                     content_length = int(self.headers['Content-Length'])
-                    if content_length < 0 or content_length > MAX_TOTAL_SIZE:
+                    # Reject invalid sizes immediately
+                    if content_length < 0:
+                        self.send_response(400)
+                        self.end_headers()
+                        self.wfile.write(b'{"error": "Invalid Content-Length: negative value"}')
+                        return
+                    if content_length > MAX_BUFFER_SIZE:
                         self.send_response(413)
                         self.end_headers()
-                        self.wfile.write(json.dumps({'error': f'Content-Length out of range (max {MAX_TOTAL_SIZE} bytes)'}).encode())
+                        self.wfile.write(json.dumps({'error': f'Content-Length exceeds buffer limit ({MAX_BUFFER_SIZE} bytes)'}).encode())
                         return
-                except (ValueError, TypeError):
+                    if content_length > MAX_TOTAL_SIZE:
+                        self.send_response(413)
+                        self.end_headers()
+                        self.wfile.write(json.dumps({'error': f'File too large (max {MAX_TOTAL_SIZE} bytes)'}).encode())
+                        return
+                except (ValueError, TypeError, OverflowError):
                     self.send_response(400)
                     self.end_headers()
-                    self.wfile.write(b'{"error": "Invalid Content-Length"}')
+                    self.wfile.write(b'{"error": "Invalid Content-Length header"}')
                     return
+            
+            # Now safe to read - use chunked reading
+            MAX_CHUNK_SIZE = 1024 * 1024  # 1MB chunks
+            content_length = int(self.headers.get('Content-Length', 0)) if 'Content-Length' in self.headers else 0
             
             # Read body in chunks
             post_data = b''
