@@ -1,11 +1,7 @@
 {
+  "framework": "nextjs",
   "buildCommand": "next build",
   "installCommand": "npm install && pip install -r requirements.txt",
-  "functions": {
-    "api/rank.py": {
-      "runtime": "python"
-    }
-  },
   "rewrites": [
     {
       "source": "/api/(.*)",
