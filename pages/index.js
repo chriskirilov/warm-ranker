@@ -15,7 +15,9 @@ export default function Home() {
     formData.append('idea', idea);
     formData.append('csv', csvFile);
     try {
-      const res = await fetch('/api/rank', { method: 'POST', body: formData });
+      // Use environment variable for API URL, fallback to relative path
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || '/api/rank';
+      const res = await fetch(apiUrl, { method: 'POST', body: formData });
       if (res.ok) {
         setResults(await res.json());
       } else {

@@ -9,3 +9,5 @@ redis
 browserbase
 python-multipart
 tabulate
+fastapi
+uvicorn[standard]

@@ -9,10 +9,17 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+
+# Deployment platforms
 .vercel
+.railway
 
 # Node modules
 node_modules/
 
 # Next.js build output
 .next/
+
+# Temporary files
+*.tmp
+/tmp/
