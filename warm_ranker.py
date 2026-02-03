@@ -7,7 +7,7 @@ import numpy as np
 from langchain.agents import initialize_agent, Tool
 from langchain_openai import ChatOpenAI  # Or OpenAI if not chat
 from langchain_core.messages import HumanMessage
-from langchain.embeddings import HuggingFaceEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from redis import Redis
 from redis.commands.search.query import Query
 from redis.commands.search.field import VectorField
