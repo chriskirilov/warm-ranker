@@ -14,4 +14,5 @@ COPY . .
 EXPOSE 8000
 
 # Start the application
-CMD ["python", "api_server.py"]
+# Use python (Python 3.12 image has python command, not python3)
+CMD python api_server.py
